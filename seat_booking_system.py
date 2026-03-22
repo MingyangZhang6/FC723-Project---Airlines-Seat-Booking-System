@@ -17,6 +17,8 @@
 # It does not yet include booking references or a database.
 # Those features can be added later in Part B.
 
+import random
+import string
 
 def create_seat_map():
     """
@@ -84,6 +86,44 @@ def is_valid_seat_code(seat_code, seats):
     False -> if the seat code does not exist
     """
     return seat_code in seats
+
+def generate_booking_reference(existing_references):
+    """
+    Generate a unique booking reference for a customer.
+
+    The booking reference must:
+    - contain exactly 8 characters
+    - use only uppercase letters and digits
+    - be unique
+
+    Parameter:
+    existing_references
+        A collection (for example a set or list) containing all
+        booking references that are already in use.
+
+    Return:
+    A unique 8-character alphanumeric booking reference.
+    """
+
+    # Create a string containing all valid characters that may be used
+    # in the booking reference.
+    # Uppercase letters A-Z are used together with digits 0-9.
+    valid_characters = string.ascii_uppercase + string.digits
+
+    # Keep generating references until a unique one is found.
+    while True:
+        # Randomly select 8 characters from the valid character set.
+        # The selected characters are then joined together to form
+        # one single booking reference string.
+        booking_reference = "".join(random.choices(valid_characters, k=8))
+
+        # Check whether the generated reference already exists.
+        # If it does not exist, it is unique and can be returned.
+        if booking_reference not in existing_references:
+            return booking_reference
+
+        # If the reference already exists, the loop continues
+        # and a new reference is generated.
 
 
 def check_availability(seats):
