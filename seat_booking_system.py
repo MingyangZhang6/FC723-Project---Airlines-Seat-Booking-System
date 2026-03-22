@@ -19,6 +19,7 @@
 
 import random
 import string
+import sqlite3
 
 def create_seat_map():
     """
@@ -124,6 +125,110 @@ def generate_booking_reference(existing_references):
 
         # If the reference already exists, the loop continues
         # and a new reference is generated.
+        
+def create_database():
+    """
+    Create a connection to the SQLite database.
+
+    The database file is stored in the same folder as the program.
+    If the database file does not already exist, SQLite will create it.
+    """
+    connection = sqlite3.connect("bookings.db")
+    return connection
+
+
+def create_bookings_table(connection):
+    """
+    Create the bookings table if it does not already exist.
+
+    The table stores:
+    - booking reference
+    - passport number
+    - first name
+    - last name
+    - seat row
+    - seat column
+    """
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bookings (
+            booking_reference TEXT PRIMARY KEY,
+            passport_number TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            seat_row INTEGER,
+            seat_column TEXT
+        )
+    """)
+
+    connection.commit()
+
+
+def get_existing_references(connection):
+    """
+    Read all booking references already stored in the database.
+
+    This is used to make sure that every new booking reference is unique.
+    """
+    cursor = connection.cursor()
+    cursor.execute("SELECT booking_reference FROM bookings")
+
+    rows = cursor.fetchall()
+
+    # Convert the query result into a set of strings
+    existing_references = set()
+    for row in rows:
+        existing_references.add(row[0])
+
+    return existing_references
+
+
+def save_booking_to_database(connection, booking_reference, passport_number,
+                             first_name, last_name, seat_code):
+    """
+    Save a new booking into the database table.
+
+    The seat code is split into:
+    - seat row number
+    - seat column letter
+    """
+    cursor = connection.cursor()
+
+    # Example: '12A' -> row = 12, column = 'A'
+    seat_row = int(seat_code[:-1])
+    seat_column = seat_code[-1]
+
+    cursor.execute("""
+        INSERT INTO bookings (
+            booking_reference,
+            passport_number,
+            first_name,
+            last_name,
+            seat_row,
+            seat_column
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (booking_reference, passport_number, first_name,
+          last_name, seat_row, seat_column))
+
+    connection.commit()
+
+
+def delete_booking_from_database(connection, booking_reference):
+    """
+    Delete a booking from the database using its booking reference.
+
+    This is used when a reserved seat is freed.
+    """
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        DELETE FROM bookings
+        WHERE booking_reference = ?
+    """, (booking_reference,))
+
+    connection.commit()
 
 
 def check_availability(seats):
@@ -162,16 +267,16 @@ def check_availability(seats):
         print(f"{seat_code} is a storage area and cannot be booked.")
 
 
-def book_seat(seats):
+def book_seat(seats, connection):
     """
-    Book a seat if it is free.
+    Book a seat if it is free, then store the booking reference
+    in the seat data structure and save passenger details in
+    the database.
 
-    The booking is only successful when:
-    - the seat code is valid
-    - the seat status is currently 'F'
-
-    If the booking is successful, the seat status is changed
-    from 'F' to 'R'.
+    In this refactored Part B version:
+    - free seats still use "F"
+    - restricted areas still use "X" or "S"
+    - booked seats now store the booking reference instead of "R"
     """
     # Ask the user for the seat they want to reserve
     seat_code = input("Enter the seat code to book: ")
@@ -189,25 +294,52 @@ def book_seat(seats):
 
     # Only free seats can be booked
     if status == "F":
-        seats[seat_code] = "R"
+        # Ask the user for passenger details
+        passport_number = input("Enter passport number: ").strip()
+        first_name = input("Enter first name: ").strip()
+        last_name = input("Enter last name: ").strip()
+
+        # Get all references already stored in the database
+        existing_references = get_existing_references(connection)
+
+        # Generate a new unique booking reference
+        booking_reference = generate_booking_reference(existing_references)
+
+        # Store the booking reference in the seat data structure
+        seats[seat_code] = booking_reference
+
+        # Save the passenger details and seat information to the database
+        save_booking_to_database(
+            connection,
+            booking_reference,
+            passport_number,
+            first_name,
+            last_name,
+            seat_code
+        )
+
         print(f"Seat {seat_code} has been successfully booked.")
-    elif status == "R":
-        print(f"Seat {seat_code} is already reserved.")
+        print(f"Booking reference: {booking_reference}")
+
     elif status == "X":
         print(f"{seat_code} is an aisle and cannot be booked.")
+
     elif status == "S":
         print(f"{seat_code} is a storage area and cannot be booked.")
 
+    else:
+        # If the seat is not F, X, or S, it is already booked
+        print(f"Seat {seat_code} is already reserved. Booking reference: {status}")
 
-def free_seat(seats):
+
+def free_seat(seats, connection):
     """
     Free a previously reserved seat.
 
-    A seat can only be freed if:
-    - the seat code is valid
-    - the seat status is currently 'R'
-
-    If successful, the seat status is changed from 'R' to 'F'.
+    In this refactored Part B version:
+    - the system reads the booking reference stored in the seat
+    - removes the related booking record from the database
+    - changes the seat status back to "F"
     """
     # Ask the user which seat they want to free
     seat_code = input("Enter the seat code to free: ")
@@ -223,16 +355,30 @@ def free_seat(seats):
     # Read the current status of the seat
     status = seats[seat_code]
 
-    # Only reserved seats can be freed
-    if status == "R":
-        seats[seat_code] = "F"
-        print(f"Seat {seat_code} has been successfully freed.")
-    elif status == "F":
-        print(f"Seat {seat_code} is already free.")
-    elif status == "X":
+    # Restricted areas cannot be changed
+    if status == "X":
         print(f"{seat_code} is an aisle and cannot be changed.")
-    elif status == "S":
+        return
+
+    if status == "S":
         print(f"{seat_code} is a storage area and cannot be changed.")
+        return
+
+    # Free seats do not need to be released
+    if status == "F":
+        print(f"Seat {seat_code} is already free.")
+        return
+
+    # If the seat is booked, the stored value is the booking reference
+    booking_reference = status
+
+    # Remove the booking from the database
+    delete_booking_from_database(connection, booking_reference)
+
+    # Change the seat status back to free
+    seats[seat_code] = "F"
+
+    print(f"Seat {seat_code} has been successfully freed.")
 
 
 def show_booking_status(seats):
@@ -243,7 +389,7 @@ def show_booking_status(seats):
     of all positions in the seating plan.
     """
     print("\n------------- Booking Status -------------")
-    print("Legend: F = Free, R = Reserved, X = Aisle, S = Storage\n")
+    print("Legend: F = Free, X = Aisle, S = Storage, other values = Booking Reference\n")
 
     # Define the row numbers used in this seating layout
     rows = [1, 2, 3, 4, 5]
@@ -280,6 +426,8 @@ def main():
     """
     # Create the initial seating plan
     seats = create_seat_map()
+    connection = create_database()
+    create_bookings_table(connection)
 
     # Keep running until the user chooses to exit
     while True:
@@ -294,15 +442,16 @@ def main():
             check_availability(seats)
 
         elif choice == "2":
-            book_seat(seats)
+            book_seat(seats, connection)
 
         elif choice == "3":
-            free_seat(seats)
+            free_seat(seats, connection)
 
         elif choice == "4":
             show_booking_status(seats)
 
         elif choice == "5":
+            connection.close()
             print("Program terminated.")
             break
 
